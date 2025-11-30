@@ -22,7 +22,8 @@ app.use(cors());
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
-    rejectUnauthorized: false // This fixes the "self-signed certificate" errors on Render/Neon
+    require: true,
+    rejectUnauthorized: false // <--- THIS IS THE KEY FIX
   }
 });
 
