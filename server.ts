@@ -22,8 +22,7 @@ app.use(cors());
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
-    require: true,
-    rejectUnauthorized: false // <--- THIS IS THE KEY FIX
+    rejectUnauthorized: false // This is sufficient to enable SSL
   }
 });
 
