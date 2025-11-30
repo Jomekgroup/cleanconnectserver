@@ -21,8 +21,15 @@ app.use(cors());
 // Database Connection
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  ssl: {
+    rejectUnauthorized: false // This fixes the "self-signed certificate" errors on Render/Neon
+  }
 });
+
+// Test the connection immediately when server starts
+pool.connect()
+  .then(() => console.log('✅ Connected to Database successfully'))
+  .catch(err => console.error('❌ Database Connection Error:', err.message));
 
 // ============================================================================
 // 2. TYPES & INTERFACES
