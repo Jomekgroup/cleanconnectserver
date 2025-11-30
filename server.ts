@@ -173,7 +173,7 @@ app.post('/api/auth/login', async (req: ExpressRequest, res: Response) => {
 });
 
 // ============================================================================
-// 7. ROUTES: USERS & CLEANERS (WITH SNAKE_CASE TO CAMELCASE FIX)
+// 7. ROUTES: USERS & CLEANERS (WITH TRIPLE ALIAS FIX)
 // ============================================================================
 app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
   try {
@@ -188,8 +188,10 @@ app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
     const user = result.rows[0];
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    // --- FIX: Translate Bookings from Snake_Case to camelCase ---
+    // 1. Process Bookings (Handle nulls safely)
     const rawBookings = user.booking_history || [];
+    
+    // 2. Format them nicely (snake_case -> camelCase)
     const formattedBookings = rawBookings.map((b: any) => ({
         id: b.id,
         clientId: b.client_id,
@@ -208,7 +210,7 @@ app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
         createdAt: b.created_at
     }));
 
-    // Format snake_case DB fields to camelCase for frontend
+    // 3. Construct User Object with MULTIPLE aliases for bookings
     const formattedUser = {
       id: user.id,
       fullName: user.full_name,
@@ -226,13 +228,18 @@ app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
       clientType: user.client_type,
       experience: user.experience,
       bio: user.bio,
-      services: user.services, // Already JSONB
+      services: user.services, 
       chargeHourly: user.charge_hourly,
       chargeDaily: user.charge_daily,
       chargePerContract: user.charge_per_contract,
       bankName: user.bank_name,
       accountNumber: user.account_number,
-      bookingHistory: formattedBookings, // <--- Use the translated list
+      
+      // --- THE TRIPLE FIX: Send data under all possible names ---
+      bookingHistory: formattedBookings, 
+      bookings: formattedBookings,       
+      history: formattedBookings,        
+      
       reviewsData: user.reviews_data || [],
       pendingSubscription: user.pending_subscription
     };
