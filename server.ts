@@ -173,7 +173,7 @@ app.post('/api/auth/login', async (req: ExpressRequest, res: Response) => {
 });
 
 // ============================================================================
-// 7. ROUTES: USERS & CLEANERS
+// 7. ROUTES: USERS & CLEANERS (WITH SNAKE_CASE TO CAMELCASE FIX)
 // ============================================================================
 app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
   try {
@@ -187,6 +187,26 @@ app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
     
     const user = result.rows[0];
     if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // --- FIX: Translate Bookings from Snake_Case to camelCase ---
+    const rawBookings = user.booking_history || [];
+    const formattedBookings = rawBookings.map((b: any) => ({
+        id: b.id,
+        clientId: b.client_id,
+        cleanerId: b.cleaner_id,
+        clientName: b.client_name,
+        cleanerName: b.cleaner_name,
+        service: b.service,
+        date: b.date,
+        amount: b.amount,
+        totalAmount: b.total_amount,
+        paymentMethod: b.payment_method,
+        status: b.status,
+        paymentStatus: b.payment_status,
+        jobApprovedByClient: b.job_approved_by_client,
+        reviewSubmitted: b.review_submitted,
+        createdAt: b.created_at
+    }));
 
     // Format snake_case DB fields to camelCase for frontend
     const formattedUser = {
@@ -212,7 +232,7 @@ app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
       chargePerContract: user.charge_per_contract,
       bankName: user.bank_name,
       accountNumber: user.account_number,
-      bookingHistory: user.booking_history || [],
+      bookingHistory: formattedBookings, // <--- Use the translated list
       reviewsData: user.reviews_data || [],
       pendingSubscription: user.pending_subscription
     };
