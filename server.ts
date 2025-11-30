@@ -16,13 +16,21 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_123';
 
 // Increase payload limit for Base64 image uploads (Receipts/Profile Pics)
 app.use(express.json({ limit: '50mb' }));
-app.use(cors());
 
-// Database Connection
+// --- CORS FIX: Allow Vercel & Localhost ---
+app.use(cors({
+  origin: '*', // Allows Vercel, Localhost, and Mobile Apps to connect
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// ============================================================================
+// 2. DATABASE CONNECTION (Render SSL Fix)
+// ============================================================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
-    rejectUnauthorized: false // This is sufficient to enable SSL
+    rejectUnauthorized: false // Required for Render/Neon self-signed certs
   }
 });
 
@@ -32,7 +40,7 @@ pool.connect()
   .catch(err => console.error('❌ Database Connection Error:', err.message));
 
 // ============================================================================
-// 2. TYPES & INTERFACES
+// 3. TYPES & INTERFACES (TypeScript Build Fix)
 // ============================================================================
 interface AuthRequest extends ExpressRequest {
   user?: {
@@ -41,10 +49,11 @@ interface AuthRequest extends ExpressRequest {
     isAdmin: boolean;
     adminRole?: string;
   };
+  [key: string]: any; // Fixes "Property does not exist" build errors
 }
 
 // ============================================================================
-// 3. UTILITIES & HELPERS
+// 4. UTILITIES & HELPERS
 // ============================================================================
 const generateToken = (id: string, role: string, isAdmin: boolean, adminRole?: string) => {
   return jwt.sign({ id, role, isAdmin, adminRole }, JWT_SECRET, { expiresIn: '30d' });
@@ -62,7 +71,7 @@ const handleError = (res: Response, error: any, message: string = 'Server Error'
   res.status(500).json({ message: error.message || message });
 };
 
-// --- NEW: Notification Helper ---
+// Notification Helper
 const createNotification = async (userId: string, title: string, message: string, type: string) => {
   try {
     await pool.query(
@@ -75,7 +84,7 @@ const createNotification = async (userId: string, title: string, message: string
 };
 
 // ============================================================================
-// 4. MIDDLEWARE
+// 5. MIDDLEWARE
 // ============================================================================
 const protect = (req: AuthRequest, res: Response, next: NextFunction) => {
   let token;
@@ -99,7 +108,7 @@ const admin = (req: AuthRequest, res: Response, next: NextFunction) => {
 };
 
 // ============================================================================
-// 5. ROUTES: AUTH
+// 6. ROUTES: AUTH
 // ============================================================================
 app.post('/api/auth/register', async (req: ExpressRequest, res: Response) => {
   const { email, password, role, fullName, phoneNumber, state, city, address, clientType, cleanerType, companyName, experience, services, bio, chargeHourly, chargeDaily, chargePerContract, bankName, accountNumber, profilePhoto, governmentId, businessRegDoc } = req.body;
@@ -164,7 +173,7 @@ app.post('/api/auth/login', async (req: ExpressRequest, res: Response) => {
 });
 
 // ============================================================================
-// 6. ROUTES: USERS & CLEANERS
+// 7. ROUTES: USERS & CLEANERS
 // ============================================================================
 app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
   try {
@@ -254,7 +263,7 @@ app.get('/api/cleaners', async (req, res) => {
 });
 
 // ============================================================================
-// 7. ROUTES: BOOKINGS
+// 8. ROUTES: BOOKINGS
 // ============================================================================
 app.post('/api/bookings', protect, async (req: AuthRequest, res) => {
   const { cleanerId, service, date, amount, totalAmount, paymentMethod } = req.body;
@@ -351,7 +360,7 @@ app.post('/api/bookings/:id/receipt', protect, async (req: AuthRequest, res) => 
 });
 
 // ============================================================================
-// 8. ROUTES: SUBSCRIPTION
+// 9. ROUTES: SUBSCRIPTION
 // ============================================================================
 app.post('/api/users/subscription/upgrade', protect, async (req: AuthRequest, res) => {
   const { plan } = req.body;
@@ -377,7 +386,7 @@ app.post('/api/users/subscription/receipt', protect, async (req: AuthRequest, re
 });
 
 // ============================================================================
-// 9. ROUTES: NOTIFICATIONS (NEW)
+// 10. ROUTES: NOTIFICATIONS
 // ============================================================================
 app.get('/api/notifications', protect, async (req: AuthRequest, res) => {
   try {
@@ -410,7 +419,7 @@ app.patch('/api/notifications/mark-all-read', protect, async (req: AuthRequest, 
 });
 
 // ============================================================================
-// 10. ROUTES: ADMIN
+// 11. ROUTES: ADMIN
 // ============================================================================
 app.get('/api/admin/users', protect, admin, async (req, res) => {
   try {
@@ -494,7 +503,7 @@ app.post('/api/admin/users/:id/approve-subscription', protect, admin, async (req
 });
 
 // ============================================================================
-// 11. ROUTES: CHAT
+// 12. ROUTES: CHAT
 // ============================================================================
 app.post('/api/chats', protect, async (req: AuthRequest, res) => {
     const { participantId } = req.body;
@@ -578,9 +587,6 @@ app.post('/api/chats/:id/messages', protect, async (req: AuthRequest, res) => {
         // Update chat last message
         await pool.query('UPDATE chats SET last_message_id = $1, updated_at = NOW() WHERE id = $2', [message.id, req.params.id]);
 
-        // Optional: Notify the receiver about the new message
-        // You would need to query the chat to find the "other" participant ID here.
-
         res.status(201).json({
             id: message.id,
             chatId: message.chat_id,
@@ -592,7 +598,7 @@ app.post('/api/chats/:id/messages', protect, async (req: AuthRequest, res) => {
 });
 
 // ============================================================================
-// 12. ROUTES: STANDARD SEARCH (No AI)
+// 13. ROUTES: STANDARD SEARCH (No AI)
 // ============================================================================
 app.get('/api/search', async (req: ExpressRequest, res: Response) => {
   const { query, location, service } = req.query;
@@ -642,8 +648,15 @@ app.get('/api/search', async (req: ExpressRequest, res: Response) => {
 });
 
 // ============================================================================
-// 13. SERVER START
+// 14. SERVER START & ROOT ROUTE
 // ============================================================================
+
+// Root Route - To verify server is running
+app.get('/', (req, res) => {
+  res.send('✅ CleanConnect Backend is Running!');
+});
+
+// 404 Handler - For unknown routes
 app.use((req, res, next) => {
     res.status(404).json({ message: `Not Found - ${req.originalUrl}` });
 });
