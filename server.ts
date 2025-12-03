@@ -17,25 +17,25 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_123';
 // Increase payload limit for Base64 image uploads
 app.use(express.json({ limit: '50mb' }));
 
-// --- 1. REQUEST LOGGER (DEBUGGING) ---
-// This will show us every single attempt the website makes
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  console.log('Origin:', req.headers.origin);
-  next();
-});
-
-// --- 2. CORS FIX (The "Unlock" Key) ---
+// --- CORS FIX: Allow Frontend to Connect ---
 app.use(cors({
-  origin: true, // This automatically allows whatever website is asking
+  origin: true, // Allow all origins dynamically
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-  credentials: true // Allow cookies/headers
+  credentials: true
 }));
 
-// Handle Preflight requests manually just in case
-app.options('*', cors());
+// --- CRITICAL FIX: Handle Preflight Requests ---
+// This stops the browser from failing with "Event" or "Network Error"
+app.options('*', cors()); 
 
+// --- REQUEST LOGGER (See what is happening in Render Logs) ---
+app.use((req, res, next) => {
+    console.log(`[${req.method}] ${req.url}`);
+    next();
+});
+
+// ... (Rest of your database connection and code remains the same) ...
 // ============================================================================
 // 3. DATABASE CONNECTION
 // ============================================================================
