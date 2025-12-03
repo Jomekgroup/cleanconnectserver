@@ -18,16 +18,22 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_123';
 app.use(express.json({ limit: '50mb' }));
 
 // --- CORS FIX: Allow Frontend to Connect ---
+// --- 1. REQUEST LOGGER (Keep this to debug) ---
+app.use((req, res, next) => {
+  console.log(`Incoming: [${req.method}] ${req.url}`);
+  next();
+});
+
+// --- 2. CORS FIX (The "Open Door" Policy) ---
+// We remove 'credentials: true' and use 'origin: *' to stop browser complaints.
 app.use(cors({
-  origin: true, // Allow all origins dynamically
+  origin: '*', 
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-  credentials: true
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// --- CRITICAL FIX: Handle Preflight Requests ---
-// This stops the browser from failing with "Event" or "Network Error"
-app.options('*', cors()); 
+// Handle Preflight strictly
+app.options('*', cors());
 
 // --- REQUEST LOGGER (See what is happening in Render Logs) ---
 app.use((req, res, next) => {
