@@ -14,22 +14,29 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_123';
 
-// --- CRITICAL FIX: CORS MUST BE FIRST ---
-// This tells the server: "Answer 'YES' to any browser asking permission"
-app.use(cors({
-  origin: '*', // Allow ALL websites (Vercel, Localhost, etc.)
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-  preflightContinue: false,
-  optionsSuccessStatus: 204
-}));
+// ============================================================================
+// CRITICAL FIX: MANUAL CORS HANDLING
+// ============================================================================
+// 1. Allow all origins and headers manually
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*"); // Allow ANY website
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept");
+  res.header("Access-Control-Allow-Credentials", "true");
+  
+  // 2. Log the request so we can see it in Render Logs
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
 
-// Handle the "Pre-flight" check explicitly for all routes
-app.options('*', cors());
+  // 3. Handle the "Preflight" (OPTIONS) check immediately
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end(); // Respond with "OK" and stop. Don't go further.
+  }
+
+  next(); // Pass to the real routes
+});
 
 // Increase payload limit
 app.use(express.json({ limit: '50mb' }));
-
 // --- REQUEST LOGGER (See what is happening in Render Logs) ---
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] Incoming: ${req.method} ${req.url}`);
