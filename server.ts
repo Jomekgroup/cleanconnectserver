@@ -1,12 +1,11 @@
 import express, { Request as ExpressRequest, Response, NextFunction } from 'express';
-import cors from 'cors';
 import dotenv from 'dotenv';
 import { Pool } from 'pg';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
 // ============================================================================
-// 1. CONFIGURATION & MIDDLEWARE (CORS MUST BE FIRST)
+// 1. CONFIGURATION & MANUAL CORS
 // ============================================================================
 dotenv.config();
 
@@ -14,26 +13,32 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_123';
 
-// --- CRITICAL: CORS Configuration ---
-// Since we are using the Vercel Proxy, we allow '*' so the proxy isn't blocked.
-app.use(cors({
-  origin: '*', 
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
-}));
-
-// Handle Preflight Requests (The "Knock" on the door)
-app.options('*', cors());
-
-// Increase payload limit for Base64 image uploads
-app.use(express.json({ limit: '50mb' }));
-
-// --- REQUEST LOGGER ---
-// This helps us see if Vercel is successfully forwarding requests to Render
+// --- CRITICAL FIX: MANUAL CORS MIDDLEWARE ---
+// This replaces the 'cors' package to guarantee Preflight (OPTIONS) success.
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] Incoming: ${req.method} ${req.url}`);
+  // 1. Allow ANYONE to connect
+  res.header("Access-Control-Allow-Origin", "*");
+  
+  // 2. Allow these specific methods
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
+  
+  // 3. Allow these headers (Content-Type is crucial for JSON)
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept");
+
+  // 4. LOGGING: Show us exactly what hit the server
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+
+  // 5. HANDLE PREFLIGHT IMMEDIATELY
+  // If the browser asks "Can I connect?", we say "YES (200)" and stop.
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   next();
 });
+
+// Increase payload limit
+app.use(express.json({ limit: '50mb' }));
 
 // ============================================================================
 // 2. DATABASE CONNECTION
@@ -41,11 +46,10 @@ app.use((req, res, next) => {
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
-    rejectUnauthorized: false // Required for Render/Neon self-signed certs
+    rejectUnauthorized: false
   }
 });
 
-// Test connection on start
 pool.connect()
   .then(() => console.log('✅ Connected to Database successfully'))
   .catch(err => console.error('❌ Database Connection Error:', err.message));
@@ -60,7 +64,7 @@ interface AuthRequest extends ExpressRequest {
     isAdmin: boolean;
     adminRole?: string;
   };
-  [key: string]: any; // Fixes TypeScript errors
+  [key: string]: any;
 }
 
 const generateToken = (id: string, role: string, isAdmin: boolean, adminRole?: string) => {
@@ -114,7 +118,7 @@ const admin = (req: AuthRequest, res: Response, next: NextFunction) => {
 };
 
 // ============================================================================
-// 5. ROUTES: AUTHENTICATION
+// 5. ROUTES: AUTH
 // ============================================================================
 app.post('/api/auth/register', async (req: ExpressRequest, res: Response) => {
   const { email, password, role, fullName, phoneNumber, state, city, address, clientType, cleanerType, companyName, experience, services, bio, chargeHourly, chargeDaily, chargePerContract, bankName, accountNumber, profilePhoto, governmentId, businessRegDoc } = req.body;
@@ -175,7 +179,7 @@ app.post('/api/auth/login', async (req: ExpressRequest, res: Response) => {
 });
 
 // ============================================================================
-// 6. ROUTES: USER DATA (With Vanishing Records Fix)
+// 6. ROUTES: USER DATA
 // ============================================================================
 app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
   try {
@@ -190,7 +194,6 @@ app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
     const user = result.rows[0];
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    // --- FIX: Translate Bookings from Snake_Case to camelCase ---
     const rawBookings = user.booking_history || [];
     const formattedBookings = rawBookings.map((b: any) => ({
         id: b.id,
@@ -227,13 +230,12 @@ app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
       clientType: user.client_type,
       experience: user.experience,
       bio: user.bio,
-      services: user.services,
+      services: user.services, 
       chargeHourly: user.charge_hourly,
       chargeDaily: user.charge_daily,
       chargePerContract: user.charge_per_contract,
       bankName: user.bank_name,
       accountNumber: user.account_number,
-      // --- THE TRIPLE FIX: Send data under all possible names ---
       bookingHistory: formattedBookings,
       bookings: formattedBookings,
       history: formattedBookings,
