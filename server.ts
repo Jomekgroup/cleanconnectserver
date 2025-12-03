@@ -6,7 +6,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
 // ============================================================================
-// 1. CONFIGURATION
+// 1. CONFIGURATION & MIDDLEWARE (CORS MUST BE FIRST)
 // ============================================================================
 dotenv.config();
 
@@ -14,30 +14,22 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_123';
 
-// ============================================================================
-// CRITICAL FIX: MANUAL CORS HANDLING
-// ============================================================================
-// 1. Allow all origins and headers manually
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*"); // Allow ANY website
-  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept");
-  res.header("Access-Control-Allow-Credentials", "true");
-  
-  // 2. Log the request so we can see it in Render Logs
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+// --- CRITICAL: CORS Configuration ---
+// Since we are using the Vercel Proxy, we allow '*' so the proxy isn't blocked.
+app.use(cors({
+  origin: '*', 
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
+}));
 
-  // 3. Handle the "Preflight" (OPTIONS) check immediately
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end(); // Respond with "OK" and stop. Don't go further.
-  }
+// Handle Preflight Requests (The "Knock" on the door)
+app.options('*', cors());
 
-  next(); // Pass to the real routes
-});
-
-// Increase payload limit
+// Increase payload limit for Base64 image uploads
 app.use(express.json({ limit: '50mb' }));
-// --- REQUEST LOGGER (See what is happening in Render Logs) ---
+
+// --- REQUEST LOGGER ---
+// This helps us see if Vercel is successfully forwarding requests to Render
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] Incoming: ${req.method} ${req.url}`);
   next();
@@ -49,10 +41,11 @@ app.use((req, res, next) => {
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
-    rejectUnauthorized: false
+    rejectUnauthorized: false // Required for Render/Neon self-signed certs
   }
 });
 
+// Test connection on start
 pool.connect()
   .then(() => console.log('✅ Connected to Database successfully'))
   .catch(err => console.error('❌ Database Connection Error:', err.message));
@@ -67,7 +60,7 @@ interface AuthRequest extends ExpressRequest {
     isAdmin: boolean;
     adminRole?: string;
   };
-  [key: string]: any;
+  [key: string]: any; // Fixes TypeScript errors
 }
 
 const generateToken = (id: string, role: string, isAdmin: boolean, adminRole?: string) => {
@@ -97,7 +90,7 @@ const createNotification = async (userId: string, title: string, message: string
 };
 
 // ============================================================================
-// 4. MIDDLEWARE
+// 4. AUTH MIDDLEWARE
 // ============================================================================
 const protect = (req: AuthRequest, res: Response, next: NextFunction) => {
   let token;
@@ -121,7 +114,7 @@ const admin = (req: AuthRequest, res: Response, next: NextFunction) => {
 };
 
 // ============================================================================
-// 5. ROUTES: AUTH
+// 5. ROUTES: AUTHENTICATION
 // ============================================================================
 app.post('/api/auth/register', async (req: ExpressRequest, res: Response) => {
   const { email, password, role, fullName, phoneNumber, state, city, address, clientType, cleanerType, companyName, experience, services, bio, chargeHourly, chargeDaily, chargePerContract, bankName, accountNumber, profilePhoto, governmentId, businessRegDoc } = req.body;
@@ -182,7 +175,7 @@ app.post('/api/auth/login', async (req: ExpressRequest, res: Response) => {
 });
 
 // ============================================================================
-// 6. ROUTES: USER DATA
+// 6. ROUTES: USER DATA (With Vanishing Records Fix)
 // ============================================================================
 app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
   try {
@@ -197,6 +190,7 @@ app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
     const user = result.rows[0];
     if (!user) return res.status(404).json({ message: 'User not found' });
 
+    // --- FIX: Translate Bookings from Snake_Case to camelCase ---
     const rawBookings = user.booking_history || [];
     const formattedBookings = rawBookings.map((b: any) => ({
         id: b.id,
@@ -233,12 +227,13 @@ app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
       clientType: user.client_type,
       experience: user.experience,
       bio: user.bio,
-      services: user.services, 
+      services: user.services,
       chargeHourly: user.charge_hourly,
       chargeDaily: user.charge_daily,
       chargePerContract: user.charge_per_contract,
       bankName: user.bank_name,
       accountNumber: user.account_number,
+      // --- THE TRIPLE FIX: Send data under all possible names ---
       bookingHistory: formattedBookings,
       bookings: formattedBookings,
       history: formattedBookings,
@@ -299,7 +294,6 @@ app.post('/api/bookings', protect, async (req: AuthRequest, res) => {
   try {
     const cleanerRes = await pool.query('SELECT full_name FROM users WHERE id = $1', [cleanerId]);
     const cleanerName = cleanerRes.rows[0]?.full_name || 'Cleaner';
-    
     const clientRes = await pool.query('SELECT full_name FROM users WHERE id = $1', [req.user!.id]);
     const clientName = clientRes.rows[0]?.full_name || 'Client';
 
@@ -320,7 +314,6 @@ app.post('/api/bookings/:id/cancel', protect, async (req: AuthRequest, res) => {
   try {
     const result = await pool.query("UPDATE bookings SET status = 'Cancelled' WHERE id = $1 RETURNING *", [req.params.id]);
     const booking = result.rows[0];
-    
     if(booking) {
          const targetId = req.user!.id === booking.client_id ? booking.cleaner_id : booking.client_id;
          await createNotification(targetId, 'Booking Cancelled', `The booking for ${booking.service} has been cancelled.`, 'booking');
@@ -595,8 +588,6 @@ app.get('/api/search', async (req: ExpressRequest, res: Response) => {
 
 // AI Search Compatibility (Fallback to standard search)
 app.post('/api/search/ai', async (req: ExpressRequest, res: Response) => {
-    // Just return empty list or generic cleaners to prevent frontend crash
-    // Since we removed AI dependencies, this acts as a placeholder
     try {
         const result = await pool.query(`SELECT * FROM users WHERE role = 'cleaner' LIMIT 5`);
         res.json({ matchingIds: result.rows.map(r => r.id) });
