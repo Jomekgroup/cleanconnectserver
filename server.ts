@@ -14,33 +14,44 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_123';
 
-// Increase payload limit for Base64 image uploads (Receipts/Profile Pics)
+// Increase payload limit for Base64 image uploads
 app.use(express.json({ limit: '50mb' }));
 
-// --- CORS FIX: Allow Vercel & Localhost ---
+// --- 1. REQUEST LOGGER (DEBUGGING) ---
+// This will show us every single attempt the website makes
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  console.log('Origin:', req.headers.origin);
+  next();
+});
+
+// --- 2. CORS FIX (The "Unlock" Key) ---
 app.use(cors({
-  origin: '*', // Allows Vercel, Localhost, and Mobile Apps to connect
+  origin: true, // This automatically allows whatever website is asking
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  credentials: true // Allow cookies/headers
 }));
 
+// Handle Preflight requests manually just in case
+app.options('*', cors());
+
 // ============================================================================
-// 2. DATABASE CONNECTION (Render SSL Fix)
+// 3. DATABASE CONNECTION
 // ============================================================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
-    rejectUnauthorized: false // Required for Render/Neon self-signed certs
+    rejectUnauthorized: false
   }
 });
 
-// Test the connection immediately when server starts
 pool.connect()
   .then(() => console.log('✅ Connected to Database successfully'))
   .catch(err => console.error('❌ Database Connection Error:', err.message));
 
 // ============================================================================
-// 3. TYPES & INTERFACES (TypeScript Build Fix)
+// 4. TYPES & HELPERS
 // ============================================================================
 interface AuthRequest extends ExpressRequest {
   user?: {
@@ -49,18 +60,14 @@ interface AuthRequest extends ExpressRequest {
     isAdmin: boolean;
     adminRole?: string;
   };
-  [key: string]: any; // Fixes "Property does not exist" build errors
+  [key: string]: any;
 }
 
-// ============================================================================
-// 4. UTILITIES & HELPERS
-// ============================================================================
 const generateToken = (id: string, role: string, isAdmin: boolean, adminRole?: string) => {
   return jwt.sign({ id, role, isAdmin, adminRole }, JWT_SECRET, { expiresIn: '30d' });
 };
 
 const sendEmail = async (to: string, subject: string, text: string) => {
-  // Mock Email Sender (Replace with Nodemailer later)
   if (process.env.NODE_ENV !== 'test') {
     console.log(`\n--- [MOCK EMAIL] ---\nTo: ${to}\nSubject: ${subject}\nBody: ${text}\n--------------------\n`);
   }
@@ -71,7 +78,6 @@ const handleError = (res: Response, error: any, message: string = 'Server Error'
   res.status(500).json({ message: error.message || message });
 };
 
-// Notification Helper
 const createNotification = async (userId: string, title: string, message: string, type: string) => {
   try {
     await pool.query(
@@ -119,8 +125,6 @@ app.post('/api/auth/register', async (req: ExpressRequest, res: Response) => {
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
-    
-    // Handle JSONB for services: pass array directly, or empty array if null
     const servicesData = JSON.stringify(services || []);
 
     const result = await pool.query(
@@ -134,8 +138,6 @@ app.post('/api/auth/register', async (req: ExpressRequest, res: Response) => {
     );
 
     const user = result.rows[0];
-    
-    // Send Welcome Notification
     await createNotification(user.id, 'Welcome to CleanConnect!', 'Your account has been successfully created.', 'system');
 
     res.status(201).json({
@@ -173,7 +175,7 @@ app.post('/api/auth/login', async (req: ExpressRequest, res: Response) => {
 });
 
 // ============================================================================
-// 7. ROUTES: USERS & CLEANERS (WITH TRIPLE ALIAS FIX)
+// 7. ROUTES: DATA (GET)
 // ============================================================================
 app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
   try {
@@ -188,10 +190,8 @@ app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
     const user = result.rows[0];
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    // 1. Process Bookings (Handle nulls safely)
+    // Format Bookings
     const rawBookings = user.booking_history || [];
-    
-    // 2. Format them nicely (snake_case -> camelCase)
     const formattedBookings = rawBookings.map((b: any) => ({
         id: b.id,
         clientId: b.client_id,
@@ -210,7 +210,6 @@ app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
         createdAt: b.created_at
     }));
 
-    // 3. Construct User Object with MULTIPLE aliases for bookings
     const formattedUser = {
       id: user.id,
       fullName: user.full_name,
@@ -228,18 +227,15 @@ app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
       clientType: user.client_type,
       experience: user.experience,
       bio: user.bio,
-      services: user.services, 
+      services: user.services,
       chargeHourly: user.charge_hourly,
       chargeDaily: user.charge_daily,
       chargePerContract: user.charge_per_contract,
       bankName: user.bank_name,
       accountNumber: user.account_number,
-      
-      // --- THE TRIPLE FIX: Send data under all possible names ---
-      bookingHistory: formattedBookings, 
-      bookings: formattedBookings,       
-      history: formattedBookings,        
-      
+      bookingHistory: formattedBookings,
+      bookings: formattedBookings, 
+      history: formattedBookings,
       reviewsData: user.reviews_data || [],
       pendingSubscription: user.pending_subscription
     };
@@ -277,7 +273,7 @@ app.get('/api/cleaners', async (req, res) => {
       id: c.id,
       name: c.full_name,
       photoUrl: c.profile_photo,
-      rating: 5.0, // Should be calculated from reviews in production
+      rating: 5.0,
       serviceTypes: c.services,
       state: c.state,
       city: c.city,
@@ -308,9 +304,7 @@ app.post('/api/bookings', protect, async (req: AuthRequest, res) => {
       [req.user!.id, cleanerId, clientName, cleanerName, service, date, amount, totalAmount, paymentMethod, paymentMethod === 'Direct' ? 'Not Applicable' : 'Pending Payment']
     );
 
-    // Notify the Cleaner
     await createNotification(cleanerId, 'New Booking Request', `You have a new booking request from ${clientName} for ${service}.`, 'booking');
-
     await sendEmail(req.user!.id, 'Booking Confirmation', `You booked ${cleanerName} for ${service}.`);
     res.status(201).json(result.rows[0]);
   } catch (error) { handleError(res, error, 'Booking failed'); }
@@ -321,12 +315,10 @@ app.post('/api/bookings/:id/cancel', protect, async (req: AuthRequest, res) => {
     const result = await pool.query("UPDATE bookings SET status = 'Cancelled' WHERE id = $1 RETURNING *", [req.params.id]);
     const booking = result.rows[0];
     
-    // Notify the other party (if client cancelled, notify cleaner)
     if(booking) {
          const targetId = req.user!.id === booking.client_id ? booking.cleaner_id : booking.client_id;
          await createNotification(targetId, 'Booking Cancelled', `The booking for ${booking.service} has been cancelled.`, 'booking');
     }
-
     res.json(booking);
   } catch (error) { handleError(res, error); }
 });
@@ -346,9 +338,7 @@ app.post('/api/bookings/:id/complete', protect, async (req: AuthRequest, res) =>
       [newPaymentStatus, req.params.id]
     );
 
-    // Notify Cleaner Job is done
     await createNotification(booking.cleaner_id, 'Job Marked Complete', 'The client has marked the job as completed.', 'booking');
-
     res.json(result.rows[0]);
   } catch (error) { handleError(res, error); }
 });
@@ -366,10 +356,7 @@ app.post('/api/bookings/:id/review', protect, async (req: AuthRequest, res) => {
     );
     
     await pool.query("UPDATE bookings SET review_submitted = true WHERE id = $1", [req.params.id]);
-    
-    // Notify Cleaner of Review
     await createNotification(cleanerId, 'New Review', `You received a ${rating}-star review from ${reviewerName}.`, 'system');
-
     res.json({ message: 'Review submitted' });
   } catch (error) { handleError(res, error); }
 });
@@ -387,15 +374,12 @@ app.post('/api/bookings/:id/receipt', protect, async (req: AuthRequest, res) => 
 });
 
 // ============================================================================
-// 9. ROUTES: SUBSCRIPTION
+// 9. SUBSCRIPTIONS & NOTIFICATIONS
 // ============================================================================
 app.post('/api/users/subscription/upgrade', protect, async (req: AuthRequest, res) => {
   const { plan } = req.body;
   try {
-    const result = await pool.query(
-      "UPDATE users SET pending_subscription = $1 WHERE id = $2 RETURNING *",
-      [plan, req.user!.id]
-    );
+    const result = await pool.query("UPDATE users SET pending_subscription = $1 WHERE id = $2 RETURNING *", [plan, req.user!.id]);
     res.json(result.rows[0]);
   } catch (error) { handleError(res, error); }
 });
@@ -404,49 +388,34 @@ app.post('/api/users/subscription/receipt', protect, async (req: AuthRequest, re
   const { name, dataUrl } = req.body;
   try {
     const receiptJson = JSON.stringify({ name, dataUrl });
-    const result = await pool.query(
-      "UPDATE users SET subscription_receipt = $1 WHERE id = $2 RETURNING *",
-      [receiptJson, req.user!.id]
-    );
+    const result = await pool.query("UPDATE users SET subscription_receipt = $1 WHERE id = $2 RETURNING *", [receiptJson, req.user!.id]);
     res.json(result.rows[0]);
   } catch (error) { handleError(res, error); }
 });
 
-// ============================================================================
-// 10. ROUTES: NOTIFICATIONS
-// ============================================================================
 app.get('/api/notifications', protect, async (req: AuthRequest, res) => {
   try {
-    const result = await pool.query(
-      'SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC', 
-      [req.user!.id]
-    );
+    const result = await pool.query('SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC', [req.user!.id]);
     res.json(result.rows);
   } catch (error) { handleError(res, error); }
 });
 
 app.patch('/api/notifications/:id/read', protect, async (req: AuthRequest, res) => {
   try {
-    await pool.query(
-      'UPDATE notifications SET is_read = true WHERE id = $1 AND user_id = $2',
-      [req.params.id, req.user!.id]
-    );
+    await pool.query('UPDATE notifications SET is_read = true WHERE id = $1 AND user_id = $2', [req.params.id, req.user!.id]);
     res.json({ message: 'Marked as read' });
   } catch (error) { handleError(res, error); }
 });
 
 app.patch('/api/notifications/mark-all-read', protect, async (req: AuthRequest, res) => {
   try {
-    await pool.query(
-      'UPDATE notifications SET is_read = true WHERE user_id = $1',
-      [req.user!.id]
-    );
+    await pool.query('UPDATE notifications SET is_read = true WHERE user_id = $1', [req.user!.id]);
     res.json({ message: 'All marked as read' });
   } catch (error) { handleError(res, error); }
 });
 
 // ============================================================================
-// 11. ROUTES: ADMIN
+// 10. ADMIN ROUTES
 // ============================================================================
 app.get('/api/admin/users', protect, admin, async (req, res) => {
   try {
@@ -460,8 +429,7 @@ app.get('/api/admin/users', protect, admin, async (req, res) => {
         isSuspended: u.is_suspended,
         subscriptionTier: u.subscription_tier,
         pendingSubscription: u.pending_subscription,
-        subscriptionReceipt: u.subscription_receipt ? JSON.parse(u.subscription_receipt) : null,
-        bookingHistory: []
+        subscriptionReceipt: u.subscription_receipt ? JSON.parse(u.subscription_receipt) : null
     })));
   } catch (error) { handleError(res, error); }
 });
@@ -483,24 +451,12 @@ app.delete('/api/admin/users/:id', protect, admin, async (req, res) => {
 
 app.post('/api/admin/bookings/:id/confirm-payment', protect, admin, async (req, res) => {
   try {
-    // 1. Update status
-    const result = await pool.query(
-      "UPDATE bookings SET payment_status = 'Confirmed' WHERE id = $1 RETURNING client_id", 
-      [req.params.id]
-    );
-    
-    // 2. Alert the Client their payment is confirmed
+    const result = await pool.query("UPDATE bookings SET payment_status = 'Confirmed' WHERE id = $1 RETURNING client_id", [req.params.id]);
     const booking = result.rows[0];
     if (booking) {
-        await createNotification(
-            booking.client_id, 
-            'Payment Confirmed', 
-            'We have received your transfer. Your booking is now fully confirmed!', 
-            'payment'
-        );
+        await createNotification(booking.client_id, 'Payment Confirmed', 'We have received your transfer.', 'payment');
     }
-    
-    res.json({ message: 'Payment confirmed and user notified' });
+    res.json({ message: 'Payment confirmed' });
   } catch (error) { handleError(res, error); }
 });
 
@@ -517,20 +473,28 @@ app.post('/api/admin/users/:id/approve-subscription', protect, admin, async (req
     const plan = userRes.rows[0]?.pending_subscription;
     if (!plan) return res.status(400).json({ message: 'No pending subscription' });
 
-    await pool.query(
-      "UPDATE users SET subscription_tier = $1, pending_subscription = NULL, subscription_receipt = NULL WHERE id = $2",
-      [plan, req.params.id]
-    );
-
-    // Notify User
+    await pool.query("UPDATE users SET subscription_tier = $1, pending_subscription = NULL, subscription_receipt = NULL WHERE id = $2", [plan, req.params.id]);
     await createNotification(req.params.id, 'Subscription Upgraded', `Your account is now upgraded to ${plan}.`, 'system');
-
     res.json({ message: 'Subscription approved' });
   } catch (error) { handleError(res, error); }
 });
 
+app.post('/api/admin/create-admin', protect, admin, async (req, res) => {
+  const { fullName, email, password, role } = req.body;
+  try {
+     const salt = await bcrypt.genSalt(10);
+     const hashedPassword = await bcrypt.hash(password, salt);
+     const result = await pool.query(
+         `INSERT INTO users (full_name, email, password_hash, role, is_admin, admin_role, created_at)
+          VALUES ($1, $2, $3, 'admin', true, $4, NOW()) RETURNING *`,
+         [fullName, email, hashedPassword, role]
+     );
+     res.status(201).json(result.rows[0]);
+  } catch (error) { handleError(res, error); }
+});
+
 // ============================================================================
-// 12. ROUTES: CHAT
+// 11. CHATS
 // ============================================================================
 app.post('/api/chats', protect, async (req: AuthRequest, res) => {
     const { participantId } = req.body;
@@ -540,25 +504,20 @@ app.post('/api/chats', protect, async (req: AuthRequest, res) => {
             `SELECT * FROM chats WHERE (participant_one = $1 AND participant_two = $2) OR (participant_one = $2 AND participant_two = $1)`,
             [userId, participantId]
         );
-        if (existingChat.rows.length > 0) {
-            return res.json({ id: existingChat.rows[0].id, participants: [existingChat.rows[0].participant_one, existingChat.rows[0].participant_two], participantNames: {} });
-        }
+        if (existingChat.rows.length > 0) return res.json({ id: existingChat.rows[0].id });
+
         const result = await pool.query(
             'INSERT INTO chats (participant_one, participant_two) VALUES ($1, $2) RETURNING *',
             [userId, participantId]
         );
-        res.status(201).json({ id: result.rows[0].id, participants: [userId, participantId], participantNames: {} });
+        res.status(201).json({ id: result.rows[0].id });
     } catch (error) { handleError(res, error, 'Failed to create chat'); }
 });
 
 app.get('/api/chats', protect, async (req: AuthRequest, res) => {
     try {
         const result = await pool.query(
-            `SELECT c.*, 
-                    m.text as last_message_text, 
-                    m.sender_id as last_message_sender, 
-                    m.created_at as last_message_time,
-                    u1.full_name as name1, u2.full_name as name2
+            `SELECT c.*, m.text as last_message_text, m.created_at as last_message_time, u1.full_name as name1, u2.full_name as name2
              FROM chats c
              LEFT JOIN messages m ON c.last_message_id = m.id
              JOIN users u1 ON c.participant_one = u1.id
@@ -570,16 +529,8 @@ app.get('/api/chats', protect, async (req: AuthRequest, res) => {
         const chats = result.rows.map(row => ({
             id: row.id,
             participants: [row.participant_one, row.participant_two],
-            participantNames: {
-                [row.participant_one]: row.name1,
-                [row.participant_two]: row.name2
-            },
-            lastMessage: row.last_message_text ? {
-                text: row.last_message_text,
-                senderId: row.last_message_sender,
-                timestamp: row.last_message_time
-            } : undefined,
-            updatedAt: row.last_message_time || row.created_at
+            participantNames: { [row.participant_one]: row.name1, [row.participant_two]: row.name2 },
+            lastMessage: row.last_message_text ? { text: row.last_message_text, timestamp: row.last_message_time } : undefined
         }));
         res.json(chats);
     } catch (error) { handleError(res, error); }
@@ -587,16 +538,9 @@ app.get('/api/chats', protect, async (req: AuthRequest, res) => {
 
 app.get('/api/chats/:id/messages', protect, async (req: AuthRequest, res) => {
     try {
-        const result = await pool.query(
-            'SELECT * FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
-            [req.params.id]
-        );
+        const result = await pool.query('SELECT * FROM messages WHERE chat_id = $1 ORDER BY created_at ASC', [req.params.id]);
         const messages = result.rows.map(r => ({
-            id: r.id,
-            chatId: r.chat_id,
-            senderId: r.sender_id,
-            text: r.text,
-            timestamp: r.created_at
+            id: r.id, chatId: r.chat_id, senderId: r.sender_id, text: r.text, timestamp: r.created_at
         }));
         res.json(messages);
     } catch (error) { handleError(res, error); }
@@ -610,83 +554,49 @@ app.post('/api/chats/:id/messages', protect, async (req: AuthRequest, res) => {
             [req.params.id, req.user!.id, text]
         );
         const message = result.rows[0];
-        
-        // Update chat last message
         await pool.query('UPDATE chats SET last_message_id = $1, updated_at = NOW() WHERE id = $2', [message.id, req.params.id]);
-
-        res.status(201).json({
-            id: message.id,
-            chatId: message.chat_id,
-            senderId: message.sender_id,
-            text: message.text,
-            timestamp: message.created_at
-        });
+        res.status(201).json({ id: message.id, chatId: message.chat_id, senderId: message.sender_id, text: message.text, timestamp: message.created_at });
     } catch (error) { handleError(res, error); }
 });
 
 // ============================================================================
-// 13. ROUTES: STANDARD SEARCH (No AI)
+// 12. SEARCH
 // ============================================================================
 app.get('/api/search', async (req: ExpressRequest, res: Response) => {
   const { query, location, service } = req.query;
-
   try {
     let sql = `SELECT * FROM users WHERE role = 'cleaner' AND is_suspended = false`;
     const params: any[] = [];
     let paramIndex = 1;
 
-    // Filter by Location
     if (location) {
-      sql += ` AND (city ILIKE $${paramIndex} OR state ILIKE $${paramIndex} OR address ILIKE $${paramIndex})`;
+      sql += ` AND (city ILIKE $${paramIndex} OR state ILIKE $${paramIndex})`;
       params.push(`%${location}%`);
       paramIndex++;
     }
-
-    // Filter by Service (JSONB or Text matching)
     if (service) {
-      // Postgres JSONB check: Does the services array contain this text?
-      // Since 'services' is JSONB, we cast to text for simple ILIKE matching
-      sql += ` AND (services::text ILIKE $${paramIndex} OR bio ILIKE $${paramIndex})`;
+      sql += ` AND (services::text ILIKE $${paramIndex})`;
       params.push(`%${service}%`);
       paramIndex++;
     }
-
-    // General Query (Name, etc)
     if (query) {
-      sql += ` AND (full_name ILIKE $${paramIndex} OR bio ILIKE $${paramIndex} OR city ILIKE $${paramIndex} OR state ILIKE $${paramIndex})`;
+      sql += ` AND (full_name ILIKE $${paramIndex} OR bio ILIKE $${paramIndex})`;
       params.push(`%${query}%`);
       paramIndex++;
     }
 
     const result = await pool.query(sql, params);
-    
-    const cleaners = result.rows.map(c => ({
-      id: c.id,
-      name: c.full_name,
-      photoUrl: c.profile_photo,
-      serviceTypes: c.services,
-      state: c.state,
-      city: c.city,
-      chargeHourly: c.charge_hourly
-    }));
-
-    res.json(cleaners);
+    res.json(result.rows.map(c => ({
+      id: c.id, name: c.full_name, photoUrl: c.profile_photo, serviceTypes: c.services, state: c.state, city: c.city, chargeHourly: c.charge_hourly
+    })));
   } catch (error) { handleError(res, error, "Search failed"); }
 });
 
 // ============================================================================
-// 14. SERVER START & ROOT ROUTE
+// 13. SERVER START
 // ============================================================================
-
-// Root Route - To verify server is running
-app.get('/', (req, res) => {
-  res.send('✅ CleanConnect Backend is Running!');
-});
-
-// 404 Handler - For unknown routes
-app.use((req, res, next) => {
-    res.status(404).json({ message: `Not Found - ${req.originalUrl}` });
-});
+app.get('/', (req, res) => { res.send('✅ CleanConnect Backend is Running!'); });
+app.use((req, res) => { res.status(404).json({ message: `Not Found - ${req.originalUrl}` }); });
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
