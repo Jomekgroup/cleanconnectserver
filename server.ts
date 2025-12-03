@@ -14,36 +14,30 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_123';
 
-// Increase payload limit for Base64 image uploads
-app.use(express.json({ limit: '50mb' }));
-
-// --- CORS FIX: Allow Frontend to Connect ---
-// --- 1. REQUEST LOGGER (Keep this to debug) ---
-app.use((req, res, next) => {
-  console.log(`Incoming: [${req.method}] ${req.url}`);
-  next();
-});
-
-// --- 2. CORS FIX (The "Open Door" Policy) ---
-// We remove 'credentials: true' and use 'origin: *' to stop browser complaints.
+// --- CRITICAL FIX: CORS MUST BE FIRST ---
+// This tells the server: "Answer 'YES' to any browser asking permission"
 app.use(cors({
-  origin: '*', 
+  origin: '*', // Allow ALL websites (Vercel, Localhost, etc.)
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 
-// Handle Preflight strictly
+// Handle the "Pre-flight" check explicitly for all routes
 app.options('*', cors());
+
+// Increase payload limit
+app.use(express.json({ limit: '50mb' }));
 
 // --- REQUEST LOGGER (See what is happening in Render Logs) ---
 app.use((req, res, next) => {
-    console.log(`[${req.method}] ${req.url}`);
-    next();
+  console.log(`[${new Date().toISOString()}] Incoming: ${req.method} ${req.url}`);
+  next();
 });
 
-// ... (Rest of your database connection and code remains the same) ...
 // ============================================================================
-// 3. DATABASE CONNECTION
+// 2. DATABASE CONNECTION
 // ============================================================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -57,7 +51,7 @@ pool.connect()
   .catch(err => console.error('❌ Database Connection Error:', err.message));
 
 // ============================================================================
-// 4. TYPES & HELPERS
+// 3. TYPES & HELPERS
 // ============================================================================
 interface AuthRequest extends ExpressRequest {
   user?: {
@@ -96,7 +90,7 @@ const createNotification = async (userId: string, title: string, message: string
 };
 
 // ============================================================================
-// 5. MIDDLEWARE
+// 4. MIDDLEWARE
 // ============================================================================
 const protect = (req: AuthRequest, res: Response, next: NextFunction) => {
   let token;
@@ -120,7 +114,7 @@ const admin = (req: AuthRequest, res: Response, next: NextFunction) => {
 };
 
 // ============================================================================
-// 6. ROUTES: AUTH
+// 5. ROUTES: AUTH
 // ============================================================================
 app.post('/api/auth/register', async (req: ExpressRequest, res: Response) => {
   const { email, password, role, fullName, phoneNumber, state, city, address, clientType, cleanerType, companyName, experience, services, bio, chargeHourly, chargeDaily, chargePerContract, bankName, accountNumber, profilePhoto, governmentId, businessRegDoc } = req.body;
@@ -181,7 +175,7 @@ app.post('/api/auth/login', async (req: ExpressRequest, res: Response) => {
 });
 
 // ============================================================================
-// 7. ROUTES: DATA (GET)
+// 6. ROUTES: USER DATA
 // ============================================================================
 app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
   try {
@@ -196,7 +190,6 @@ app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
     const user = result.rows[0];
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    // Format Bookings
     const rawBookings = user.booking_history || [];
     const formattedBookings = rawBookings.map((b: any) => ({
         id: b.id,
@@ -233,14 +226,14 @@ app.get('/api/users/me', protect, async (req: AuthRequest, res) => {
       clientType: user.client_type,
       experience: user.experience,
       bio: user.bio,
-      services: user.services,
+      services: user.services, 
       chargeHourly: user.charge_hourly,
       chargeDaily: user.charge_daily,
       chargePerContract: user.charge_per_contract,
       bankName: user.bank_name,
       accountNumber: user.account_number,
       bookingHistory: formattedBookings,
-      bookings: formattedBookings, 
+      bookings: formattedBookings,
       history: formattedBookings,
       reviewsData: user.reviews_data || [],
       pendingSubscription: user.pending_subscription
@@ -292,7 +285,7 @@ app.get('/api/cleaners', async (req, res) => {
 });
 
 // ============================================================================
-// 8. ROUTES: BOOKINGS
+// 7. ROUTES: BOOKINGS
 // ============================================================================
 app.post('/api/bookings', protect, async (req: AuthRequest, res) => {
   const { cleanerId, service, date, amount, totalAmount, paymentMethod } = req.body;
@@ -333,17 +326,14 @@ app.post('/api/bookings/:id/complete', protect, async (req: AuthRequest, res) =>
   try {
     const bookingRes = await pool.query('SELECT * FROM bookings WHERE id = $1', [req.params.id]);
     const booking = bookingRes.rows[0];
-    
     let newPaymentStatus = booking.payment_status;
     if (booking.payment_method === 'Escrow' && booking.payment_status === 'Confirmed') {
       newPaymentStatus = 'Pending Payout';
     }
-
     const result = await pool.query(
       "UPDATE bookings SET status = 'Completed', job_approved_by_client = true, payment_status = $1 WHERE id = $2 RETURNING *", 
       [newPaymentStatus, req.params.id]
     );
-
     await createNotification(booking.cleaner_id, 'Job Marked Complete', 'The client has marked the job as completed.', 'booking');
     res.json(result.rows[0]);
   } catch (error) { handleError(res, error); }
@@ -354,13 +344,11 @@ app.post('/api/bookings/:id/review', protect, async (req: AuthRequest, res) => {
   try {
     const clientRes = await pool.query('SELECT full_name FROM users WHERE id = $1', [req.user!.id]);
     const reviewerName = clientRes.rows[0]?.full_name || 'Anonymous';
-
     await pool.query(
       `INSERT INTO reviews (booking_id, cleaner_id, reviewer_name, rating, timeliness, thoroughness, conduct, comment, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
       [req.params.id, cleanerId, reviewerName, rating, timeliness, thoroughness, conduct, comment]
     );
-    
     await pool.query("UPDATE bookings SET review_submitted = true WHERE id = $1", [req.params.id]);
     await createNotification(cleanerId, 'New Review', `You received a ${rating}-star review from ${reviewerName}.`, 'system');
     res.json({ message: 'Review submitted' });
@@ -380,7 +368,7 @@ app.post('/api/bookings/:id/receipt', protect, async (req: AuthRequest, res) => 
 });
 
 // ============================================================================
-// 9. SUBSCRIPTIONS & NOTIFICATIONS
+// 8. SUBSCRIPTIONS & NOTIFICATIONS
 // ============================================================================
 app.post('/api/users/subscription/upgrade', protect, async (req: AuthRequest, res) => {
   const { plan } = req.body;
@@ -421,7 +409,7 @@ app.patch('/api/notifications/mark-all-read', protect, async (req: AuthRequest, 
 });
 
 // ============================================================================
-// 10. ADMIN ROUTES
+// 9. ADMIN ROUTES
 // ============================================================================
 app.get('/api/admin/users', protect, admin, async (req, res) => {
   try {
@@ -500,7 +488,7 @@ app.post('/api/admin/create-admin', protect, admin, async (req, res) => {
 });
 
 // ============================================================================
-// 11. CHATS
+// 10. CHATS
 // ============================================================================
 app.post('/api/chats', protect, async (req: AuthRequest, res) => {
     const { participantId } = req.body;
@@ -566,7 +554,7 @@ app.post('/api/chats/:id/messages', protect, async (req: AuthRequest, res) => {
 });
 
 // ============================================================================
-// 12. SEARCH
+// 11. SEARCH & CONTACT
 // ============================================================================
 app.get('/api/search', async (req: ExpressRequest, res: Response) => {
   const { query, location, service } = req.query;
@@ -598,8 +586,24 @@ app.get('/api/search', async (req: ExpressRequest, res: Response) => {
   } catch (error) { handleError(res, error, "Search failed"); }
 });
 
+// AI Search Compatibility (Fallback to standard search)
+app.post('/api/search/ai', async (req: ExpressRequest, res: Response) => {
+    // Just return empty list or generic cleaners to prevent frontend crash
+    // Since we removed AI dependencies, this acts as a placeholder
+    try {
+        const result = await pool.query(`SELECT * FROM users WHERE role = 'cleaner' LIMIT 5`);
+        res.json({ matchingIds: result.rows.map(r => r.id) });
+    } catch (error) { res.json({ matchingIds: [] }); }
+});
+
+// Contact Route
+app.post('/api/contact', (req, res) => {
+    console.log("Contact Form Submitted:", req.body);
+    res.json({ message: 'Message received successfully!' });
+});
+
 // ============================================================================
-// 13. SERVER START
+// 12. SERVER START
 // ============================================================================
 app.get('/', (req, res) => { res.send('✅ CleanConnect Backend is Running!'); });
 app.use((req, res) => { res.status(404).json({ message: `Not Found - ${req.originalUrl}` }); });
